@@ -1,0 +1,25 @@
+{
+  "name": "rugby-analyse",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Analyse vidéo et statistique de match de rugby pour clubs amateurs (MVP)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @rugby/shared && npm run build -w @rugby/api -w @rugby/worker -w @rugby/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "db:start": "bash scripts/dev-db.sh start",
+    "db:stop": "bash scripts/dev-db.sh stop",
+    "migrate": "npm run migrate -w @rugby/api",
+    "seed:demo": "npm run seed:demo -w @rugby/api",
+    "dev:api": "npm run dev -w @rugby/api",
+    "dev:worker": "npm run dev -w @rugby/worker",
+    "dev:web": "npm run dev -w @rugby/web"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
