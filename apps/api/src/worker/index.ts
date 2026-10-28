@@ -67,12 +67,20 @@ export async function demarrerWorker() {
   await ecouter();
   process.on('unhandledRejection', (e) => console.error('[worker] promesse rejetée non gérée :', e));
   setInterval(() => void remplir(), 5000);
+  // Signal de vie toutes les 5 s : l'interface sait si un worker tourne et combien de traitements sont en cours
+  const nom = `${(await import('node:os')).hostname()}-${process.pid}`;
+  const battement = () => poolAdmin.query(
+    `INSERT INTO workers (nom, vu_le, actifs, concurrence) VALUES ($1, now(), $2, $3)
+     ON CONFLICT (nom) DO UPDATE SET vu_le = now(), actifs = $2, concurrence = $3`, [nom, actifs, CONCURRENCE]).catch(() => undefined);
+  await battement();
+  setInterval(() => void battement(), 5000);
   console.log(`[worker] démarré, ${CONCURRENCE} traitement(s) en parallèle`);
   await remplir();
   const stop = async () => {
     arret = true;
     console.log('[worker] arrêt demandé, fin des traitements en cours...');
     while (actifs > 0) await new Promise((r) => setTimeout(r, 500));
+    await poolAdmin.query('DELETE FROM workers WHERE nom = $1', [nom]).catch(() => undefined);
     process.exit(0);
   };
   process.on('SIGTERM', stop);

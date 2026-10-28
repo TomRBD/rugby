@@ -55,7 +55,7 @@ export async function transcodage(job: Job) {
   const v = (await poolAdmin.query('SELECT * FROM videos WHERE id = $1 AND club_id = $2', [videoId, job.club_id])).rows[0];
   if (!v) return;
   const parties = (await poolAdmin.query('SELECT * FROM video_parties WHERE video_id = $1 ORDER BY ordre', [videoId])).rows;
-  await majVideo(videoId, { statut: 'transcodage', progression: 0, erreur: null });
+  await majVideo(videoId, { statut: 'transcodage', progression: 0, erreur: null, etape: parties.length > 1 ? 'assemblage' : 'analyse', traitement_debut: null });
   const tmp = await dossierTemporaire('transcodage');
   try {
     const fichiers: string[] = [];
@@ -69,6 +69,8 @@ export async function transcodage(job: Job) {
     }
     const duree = sondes.reduce((a, s) => a + s.duree, 0);
     const hauteurSource = Math.max(...sondes.map((s) => s.hauteur));
+    // La durée est connue dès l'analyse : l'interface peut estimer le temps restant pendant la conversion
+    await majVideo(videoId, { duree, hauteur: hauteurSource, etape: 'conversion', traitement_debut: new Date() });
     const audio = sondes.every((s) => s.audio);
     let rends = RENDITIONS.filter((r) => r.hauteur <= hauteurSource + 8);
     if (!rends.length) rends = [RENDITIONS[2]];
@@ -103,6 +105,7 @@ export async function transcodage(job: Job) {
     );
     for (const r of rends) await fs.mkdir(path.join(sortie, r.nom), { recursive: true });
     await ffmpegAvecProgression(args, duree, (p) => { void majVideo(videoId, { progression: Math.round(p * 90) / 100 }); });
+    await majVideo(videoId, { etape: 'vignettes', progression: 0.92 });
 
     // Planche de vignettes (1 image / 10 s) pour le survol de la timeline
     const plusBasse = rends[rends.length - 1].nom;
@@ -114,10 +117,11 @@ export async function transcodage(job: Job) {
       '-frames:v', '1', '-q:v', '5', path.join(sortie, 'vignettes.jpg')]).catch(() => undefined);
     await fs.writeFile(path.join(sortie, 'vignettes.json'), JSON.stringify({ intervalle: 10, colonnes, largeur: 160, hauteur: 90 }));
 
+    await majVideo(videoId, { etape: 'publication', progression: 0.95 });
     await stockage.televerserDossier(sortie, `${prefixeVideo(job.club_id!, videoId)}/hls`);
     const largeur = Math.max(...sondes.map((s) => s.largeur));
     await majVideo(videoId, {
-      statut: 'pret', progression: 1, duree, largeur, hauteur: hauteurSource,
+      statut: 'pret', progression: 1, duree, largeur, hauteur: hauteurSource, etape: 'pret',
       renditions: JSON.stringify(rends.map((r) => r.nom)),
     });
     if (!v.conserver_original) await stockage.supprimerPrefixe(`${prefixeVideo(job.club_id!, videoId)}/original`);

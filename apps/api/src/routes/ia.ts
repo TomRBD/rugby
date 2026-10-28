@@ -59,6 +59,48 @@ export default async function routesIa(app: FastifyInstance) {
     });
   });
 
+  // Avancement complet d'un match : étapes du traitement vidéo (temps restant estimé), worker actif, checklist
+  app.get('/api/clubs/:clubId/matchs/:id/avancement', async (req) => {
+    const ctx = await contexte(req, 'match.lire');
+    const { id } = valider(z.object({ id: uuid }), req.params);
+    return avec(ctx, async (db) => {
+      const m = await matchAccessible(db, ctx, id, 'match.lire');
+      const videos = (await db.query("SELECT id, angle, statut, etape, progression, duree, erreur, traitement_debut, cree_le FROM videos WHERE match_id = $1 ORDER BY (angle = 'Principal') DESC, cree_le", [id])).rows;
+      const parties = (await db.query('SELECT video_id, sum(taille)::bigint AS taille, sum(recu)::bigint AS recu FROM video_parties WHERE video_id = ANY($1::uuid[]) GROUP BY video_id', [videos.map((v) => v.id)])).rows;
+      const jobs = (await db.query(
+        `SELECT j.id, j.type, j.statut, j.erreur, j.cree_le, j.payload->>'videoId' AS video_id,
+                (SELECT count(*) FROM jobs a WHERE a.statut = 'en_attente' AND a.cree_le < j.cree_le)::int AS devant
+         FROM jobs j WHERE j.club_id = $1 AND (j.payload->>'matchId' = $2 OR j.payload->>'videoId' = ANY($3)) ORDER BY j.cree_le DESC LIMIT 20`,
+        [ctx.clubId, id, videos.map((v) => v.id)])).rows;
+      const workers = (await db.query("SELECT count(*)::int AS n, coalesce(sum(actifs), 0)::int AS actifs, coalesce(sum(concurrence), 0)::int AS places FROM workers WHERE vu_le > now() - interval '30 seconds'")).rows[0];
+      const compte = async (sql: string) => Number((await db.query(sql, [id])).rows[0].n);
+      return {
+        worker: { actif: workers.n > 0, nombre: workers.n, traitementsEnCours: workers.actifs, places: workers.places },
+        videos: videos.map((v) => {
+          const p = parties.find((x) => x.video_id === v.id);
+          // Estimation : vitesse de conversion observée depuis le début de l'étape (90 % de la progression totale)
+          let resteSecondes: number | null = null;
+          if (v.statut === 'transcodage' && v.etape === 'conversion' && v.traitement_debut && v.progression > 0.02) {
+            const ecoule = (Date.now() - new Date(v.traitement_debut).getTime()) / 1000;
+            const fait = Math.min(1, v.progression / 0.9);
+            resteSecondes = Math.round((ecoule / fait) * (1 - fait) + 30);
+          }
+          return { ...v, envoi: p ? { taille: p.taille, recu: p.recu } : null, resteSecondes, jobs: jobs.filter((j) => j.video_id === v.id) };
+        }),
+        jobs,
+        checklist: {
+          feuille: await compte('SELECT count(*) AS n FROM feuille_match WHERE match_id = $1'),
+          coupsEnvoi: [m.coup_envoi_1, m.coup_envoi_2].filter((x) => x != null).length,
+          evenements: await compte('SELECT count(*) AS n FROM evenements WHERE match_id = $1 AND NOT supprime'),
+          aCompleter: await compte('SELECT count(*) AS n FROM evenements WHERE match_id = $1 AND NOT supprime AND a_completer'),
+          propositions: await compte("SELECT count(*) AS n FROM propositions_ia WHERE match_id = $1 AND statut = 'en_attente'"),
+          playlists: await compte('SELECT count(*) AS n FROM playlists WHERE match_id = $1'),
+          statut: m.statut,
+        },
+      };
+    });
+  });
+
   // Tracking (V2) : pistes de joueurs, correction manuelle des numéros lus par OCR, vue 2D, métriques estimées
   app.get('/api/clubs/:clubId/matchs/:id/tracking', async (req) => {
     const ctx = await contexte(req, 'stats.lire');

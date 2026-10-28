@@ -12,6 +12,7 @@ import { StatsMatch } from './match/StatsMatch';
 import { PlaylistsMatch } from './match/PlaylistsMatch';
 import { genererCarteResultat } from '../composants/CarteResultat';
 import { TrackingMatch } from './match/TrackingMatch';
+import { Avancement } from '../composants/Avancement';
 
 export default function Match() {
   const { id } = useParams();
@@ -57,6 +58,7 @@ export default function Match() {
           }}>Carte de résultat</button>
         </div>
       </div>
+      <Avancement matchId={id!} onVideoPrete={() => void m.recharger()} />
       <nav className="onglets" aria-label="Sections du match">
         <NavLink end to={`/matchs/${id}`} className={({ isActive }) => (isActive ? 'actif' : '')}>Infos et feuille de match</NavLink>
         <NavLink to={`/matchs/${id}/video`} className={({ isActive }) => (isActive ? 'actif' : '')}>Vidéo</NavLink>
