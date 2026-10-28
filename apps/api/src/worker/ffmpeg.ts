@@ -3,6 +3,23 @@ import { spawn } from 'node:child_process';
 export const FFMPEG = process.env.FFMPEG_PATH ?? 'ffmpeg';
 export const FFPROBE = process.env.FFPROBE_PATH ?? 'ffprobe';
 
+export function messageIntrouvable(cmd: string) {
+  return `${cmd} introuvable sur la machine du worker. Installez FFmpeg (Windows : winget install Gyan.FFmpeg, puis rouvrez le terminal ; `
+    + `macOS : brew install ffmpeg ; Linux : apt install ffmpeg) ou indiquez son chemin dans .env (FFMPEG_PATH et FFPROBE_PATH), puis relancez le worker.`;
+}
+
+/** Vérifie que ffmpeg et ffprobe se lancent. */
+export async function verifierFfmpeg(): Promise<string | null> {
+  for (const cmd of [FFMPEG, FFPROBE]) {
+    try {
+      await executer(cmd, ['-version']);
+    } catch (e) {
+      return (e as Error).message;
+    }
+  }
+  return null;
+}
+
 export interface Sonde {
   duree: number;
   largeur: number;
@@ -29,7 +46,7 @@ export function executer(cmd: string, args: string[], surSortie?: (ligne: string
     p.stderr.on('data', (d: Buffer) => {
       stderr = (stderr + d.toString()).slice(-200_000);
     });
-    p.on('error', reject);
+    p.on('error', (e: NodeJS.ErrnoException) => reject(e.code === 'ENOENT' ? new Error(messageIntrouvable(cmd)) : e));
     p.on('close', (code) => (code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`${cmd} a échoué (${code}) : ${stderr.slice(-1500)}`))));
   });
 }

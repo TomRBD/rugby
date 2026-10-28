@@ -72,10 +72,17 @@ export default async function routesIa(app: FastifyInstance) {
                 (SELECT count(*) FROM jobs a WHERE a.statut = 'en_attente' AND a.cree_le < j.cree_le)::int AS devant
          FROM jobs j WHERE j.club_id = $1 AND (j.payload->>'matchId' = $2 OR j.payload->>'videoId' = ANY($3)) ORDER BY j.cree_le DESC LIMIT 20`,
         [ctx.clubId, id, videos.map((v) => v.id)])).rows;
-      const workers = (await db.query("SELECT count(*)::int AS n, coalesce(sum(actifs), 0)::int AS actifs, coalesce(sum(concurrence), 0)::int AS places FROM workers WHERE vu_le > now() - interval '30 seconds'")).rows[0];
+      const workers = (await db.query(
+        `SELECT count(*)::int AS n, coalesce(sum(actifs), 0)::int AS actifs, coalesce(sum(concurrence), 0)::int AS places,
+                bool_or(ffmpeg) AS ffmpeg, max(ffmpeg_erreur) FILTER (WHERE NOT ffmpeg) AS ffmpeg_erreur
+         FROM workers WHERE vu_le > now() - interval '30 seconds'`)).rows[0];
       const compte = async (sql: string) => Number((await db.query(sql, [id])).rows[0].n);
       return {
-        worker: { actif: workers.n > 0, nombre: workers.n, traitementsEnCours: workers.actifs, places: workers.places },
+        worker: {
+          actif: workers.n > 0, nombre: workers.n, traitementsEnCours: workers.actifs, places: workers.places,
+          // FFmpeg absent sur tous les workers actifs : les vidéos ne peuvent pas être traitées
+          ffmpegErreur: workers.n > 0 && !workers.ffmpeg ? workers.ffmpeg_erreur : null,
+        },
         videos: videos.map((v) => {
           const p = parties.find((x) => x.video_id === v.id);
           // Estimation : vitesse de conversion observée depuis le début de l'étape (90 % de la progression totale)

@@ -2,7 +2,9 @@
 // et détail du traitement vidéo en cours (étape, pourcentage, temps restant, worker actif).
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useClubApi } from '../lib/session';
+import { useClubApi, useSession } from '../lib/session';
+import { api } from '../lib/api';
+import { useAction } from './ui';
 import { useDonnees } from '../lib/hooks';
 import { etatTeleversements, type EtatTeleversement } from '../lib/televersement';
 
@@ -38,11 +40,13 @@ function etapesVideo(v: any, envoiLocal: EtatTeleversement | undefined): { cle: 
   else if (v.statut === 'en_attente') courante = 'file';
   else if (v.statut === 'transcodage') courante = v.etape === 'assemblage' ? 'analyse' : v.etape ?? 'analyse';
   else if (v.statut === 'pret' && jobIa && ['en_attente', 'en_cours'].includes(jobIa.statut)) courante = 'ia';
+  // En erreur : l'étape qui a échoué est la dernière enregistrée par le worker
+  else if (v.statut === 'erreur') courante = v.etape === 'assemblage' ? 'analyse' : v.etape && ordre.includes(v.etape) ? v.etape : 'analyse';
   else courante = 'fin';
   const idx = courante === 'fin' ? ordre.length : ordre.indexOf(courante);
   return ETAPES_VIDEO.map((e, i) => {
     let etat: Etat = i < idx ? 'fait' : i === idx ? 'en_cours' : 'a_faire';
-    if (v.statut === 'erreur' && i === Math.max(0, idx - 1)) etat = 'erreur';
+    if (v.statut === 'erreur' && i === idx) etat = 'erreur';
     let detail: string | undefined;
     if (e.cle === 'envoi' && etat === 'en_cours') {
       const recu = envoiLocal ? envoiLocal.progression : v.envoi ? v.envoi.recu / v.envoi.taille : 0;
@@ -64,6 +68,8 @@ function etapesVideo(v: any, envoiLocal: EtatTeleversement | undefined): { cle: 
 
 export function Avancement({ matchId, onVideoPrete }: { matchId: string; onVideoPrete?: () => void }) {
   const url = useClubApi();
+  const action = useAction();
+  const { peut } = useSession();
   const a = useDonnees<any>(url(`/matchs/${matchId}/avancement`));
   const [envois, setEnvois] = useState<EtatTeleversement[]>([]);
   const [ouvert, setOuvert] = useState(true);
@@ -96,7 +102,7 @@ export function Avancement({ matchId, onVideoPrete }: { matchId: string; onVideo
 
   const etapes: { label: string; etat: Etat; detail: string; lien?: string; action?: string }[] = [
     { label: 'Feuille de match', etat: c.feuille ? 'fait' : 'a_faire', detail: c.feuille ? `${c.feuille} joueurs` : 'facultative, utile pour le temps de jeu et les stats par joueur', lien: `/matchs/${matchId}`, action: 'Remplir' },
-    { label: 'Vidéo', etat: vPrete ? 'fait' : videos.some((v: any) => v.statut === 'erreur') ? 'erreur' : vEnCours ? 'en_cours' : 'a_faire', detail: vPrete ? 'prête à coder' : vEnCours ? 'traitement en cours (détail ci-dessous)' : 'à envoyer', lien: `/matchs/${matchId}/video`, action: 'Envoyer' },
+    { label: 'Vidéo', etat: vPrete ? 'fait' : videos.some((v: any) => v.statut === 'erreur') ? 'erreur' : vEnCours ? 'en_cours' : 'a_faire', detail: vPrete ? 'prête à coder' : videos.some((v: any) => v.statut === 'erreur') ? 'traitement en échec (détail ci-dessous)' : vEnCours ? 'traitement en cours (détail ci-dessous)' : 'à envoyer', lien: videos.length ? undefined : `/matchs/${matchId}/video`, action: 'Envoyer' },
     { label: 'Coups d\'envoi placés', etat: c.coupsEnvoi === 2 ? 'fait' : c.coupsEnvoi === 1 || c.propositions ? 'en_cours' : 'a_faire', detail: c.coupsEnvoi === 2 ? 'horloge du match synchronisée' : `${c.coupsEnvoi}/2${c.propositions ? `, ${c.propositions} proposition(s) de l'IA à valider` : ''}`, lien: vPrete ? `/matchs/${matchId}/codage` : undefined, action: 'Placer' },
     { label: 'Codage', etat: ['code', 'valide'].includes(c.statut) ? 'fait' : c.evenements ? 'en_cours' : 'a_faire', detail: c.evenements ? `${c.evenements} actions codées${c.aCompleter ? `, ${c.aCompleter} à compléter` : ''}` : 'aucune action codée', lien: vPrete ? `/matchs/${matchId}/codage` : undefined, action: c.evenements ? 'Continuer' : 'Coder' },
     { label: 'Statistiques', etat: c.evenements ? 'fait' : 'a_faire', detail: c.evenements ? 'calculées à chaque action codée' : 'apparaissent dès la première action codée', lien: c.evenements ? `/matchs/${matchId}/stats` : undefined, action: 'Voir' },
@@ -125,6 +131,11 @@ export function Avancement({ matchId, onVideoPrete }: { matchId: string; onVideo
             ))}
           </div>
 
+          {worker.ffmpegErreur && (
+            <div className="alerte erreur">
+              <strong>FFmpeg n'est pas disponible pour le worker</strong> : les vidéos attendent en file sans être abîmées. {worker.ffmpegErreur}
+            </div>
+          )}
           {attenteSansWorker && (
             <div className="alerte erreur">
               <strong>Aucun worker vidéo ne tourne</strong> : la vidéo restera en attente. Lancez dans un terminal <code>npm run dev:worker</code> (FFmpeg doit être installé).
@@ -145,7 +156,16 @@ export function Avancement({ matchId, onVideoPrete }: { matchId: string; onVideo
                 ))}
               </ol>
               {v.statut === 'transcodage' && v.etape === 'conversion' && <div className="barre-progression" style={{ marginTop: 8 }}><div style={{ width: `${Math.min(100, (v.progression / 0.9) * 100)}%` }} /></div>}
-              {v.erreur && <div className="alerte erreur" style={{ marginTop: 8 }}>{v.erreur}</div>}
+              {v.erreur && (
+                <div className="alerte erreur pile" style={{ marginTop: 8 }}>
+                  <span>{v.erreur.includes('introuvable') ? v.erreur : `Le traitement a échoué : ${v.erreur}`}</span>
+                  {v.statut === 'erreur' && peut('video.ecrire') && (
+                    <div><button className="bouton primaire petit" onClick={() => action(() => api(url(`/videos/${v.id}/relancer`), { corps: {} }), 'Traitement relancé').then(() => a.recharger())}>
+                      Relancer le traitement
+                    </button> <span className="muet petit">La vidéo déjà envoyée est réutilisée, inutile de la renvoyer.</span></div>
+                  )}
+                </div>
+              )}
               {v.statut === 'transcodage' && <p className="muet petit" style={{ margin: '8px 0 0' }}>Vous pouvez fermer cette page : le traitement continue sur le serveur.</p>}
             </div>
           ))}

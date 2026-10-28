@@ -4,17 +4,22 @@ import { config } from '../lib/config.js';
 import { poolAdmin } from '../lib/db.js';
 import { migrer } from '../migrate.js';
 import { TACHES, type Job } from './taches.js';
+import { verifierFfmpeg } from './ffmpeg.js';
 
 const CONCURRENCE = Number(process.env.WORKER_CONCURRENCY ?? Math.max(2, Math.floor((await import('node:os')).cpus().length / 4)));
 const MAX_TENTATIVES = 3;
 let actifs = 0;
 let arret = false;
+// Sans FFmpeg, le worker ne prend que les traitements qui n'en ont pas besoin (les vidéos restent en file, intactes)
+let erreurFfmpeg: string | null = null;
+const SANS_FFMPEG = ['purge_club', 'archivage_saison'];
 
 async function prendreJob(): Promise<Job | null> {
   const r = await poolAdmin.query(
     `UPDATE jobs SET statut = 'en_cours', verrouille_le = now(), tentatives = tentatives + 1
-     WHERE id = (SELECT id FROM jobs WHERE statut = 'en_attente' AND executer_apres <= now() ORDER BY cree_le FOR UPDATE SKIP LOCKED LIMIT 1)
-     RETURNING id, club_id, type, payload, tentatives`);
+     WHERE id = (SELECT id FROM jobs WHERE statut = 'en_attente' AND executer_apres <= now() AND ($1::text[] IS NULL OR type = ANY($1))
+                 ORDER BY cree_le FOR UPDATE SKIP LOCKED LIMIT 1)
+     RETURNING id, club_id, type, payload, tentatives`, [erreurFfmpeg ? SANS_FFMPEG : null]);
   return r.rows[0] ?? null;
 }
 
@@ -50,6 +55,9 @@ async function remplir() {
 
 export async function demarrerWorker() {
   await migrer();
+  // Vérification avant de prendre le moindre job : sans FFmpeg, une vidéo échouerait 3 fois et passerait en erreur
+  erreurFfmpeg = await verifierFfmpeg();
+  if (erreurFfmpeg) console.error(`\n[worker] ATTENTION : ${erreurFfmpeg}\n[worker] Les vidéos restent en file d'attente jusqu'à ce que FFmpeg soit disponible.\n`);
   // Jobs restés « en cours » après un arrêt brutal : remis en file
   await poolAdmin.query("UPDATE jobs SET statut = 'en_attente' WHERE statut = 'en_cours' AND verrouille_le < now() - interval '3 hours'");
   // Écoute des nouveaux jobs ; en cas de coupure on se reconnecte (l'interrogation toutes les 5 s prend le relais)
@@ -69,9 +77,17 @@ export async function demarrerWorker() {
   setInterval(() => void remplir(), 5000);
   // Signal de vie toutes les 5 s : l'interface sait si un worker tourne et combien de traitements sont en cours
   const nom = `${(await import('node:os')).hostname()}-${process.pid}`;
+  const controlerFfmpeg = async () => {
+    const avant = erreurFfmpeg;
+    erreurFfmpeg = await verifierFfmpeg();
+    if (erreurFfmpeg && erreurFfmpeg !== avant) console.error(`\n[worker] ATTENTION : ${erreurFfmpeg}\n[worker] Les vidéos restent en file d'attente jusqu'à ce que FFmpeg soit disponible.\n`);
+    if (!erreurFfmpeg && avant) { console.log('[worker] FFmpeg disponible, reprise des traitements vidéo'); void remplir(); }
+  };
+  setInterval(() => void controlerFfmpeg(), 30000);
   const battement = () => poolAdmin.query(
-    `INSERT INTO workers (nom, vu_le, actifs, concurrence) VALUES ($1, now(), $2, $3)
-     ON CONFLICT (nom) DO UPDATE SET vu_le = now(), actifs = $2, concurrence = $3`, [nom, actifs, CONCURRENCE]).catch(() => undefined);
+    `INSERT INTO workers (nom, vu_le, actifs, concurrence, ffmpeg, ffmpeg_erreur) VALUES ($1, now(), $2, $3, $4, $5)
+     ON CONFLICT (nom) DO UPDATE SET vu_le = now(), actifs = $2, concurrence = $3, ffmpeg = $4, ffmpeg_erreur = $5`,
+    [nom, actifs, CONCURRENCE, !erreurFfmpeg, erreurFfmpeg]).catch(() => undefined);
   await battement();
   setInterval(() => void battement(), 5000);
   console.log(`[worker] démarré, ${CONCURRENCE} traitement(s) en parallèle`);

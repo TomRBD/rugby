@@ -120,6 +120,26 @@ export default async function routesVideos(app: FastifyInstance) {
     });
   });
 
+  // Relance du traitement d'une vidéo en erreur (par exemple après installation de FFmpeg)
+  app.post('/api/clubs/:clubId/videos/:vid/relancer', async (req) => {
+    const ctx = await contexte(req, 'video.ecrire');
+    const { vid } = valider(z.object({ vid: uuid }), req.params);
+    return avec(ctx, async (db) => {
+      const v = (await db.query('SELECT * FROM videos WHERE id = $1 FOR UPDATE', [vid])).rows[0];
+      if (!v) throw nonTrouve('Vidéo');
+      await matchAccessible(db, ctx, v.match_id, 'video.ecrire');
+      if (v.statut !== 'erreur') throw requeteInvalide('Seule une vidéo en erreur peut être relancée');
+      const incompletes = (await db.query('SELECT 1 FROM video_parties WHERE video_id = $1 AND recu < taille', [vid])).rowCount;
+      if (incompletes) throw requeteInvalide('Envoi incomplet : resélectionnez le fichier pour terminer l\'envoi');
+      await db.query("UPDATE videos SET statut = 'en_attente', erreur = NULL, etape = NULL, progression = 0 WHERE id = $1", [vid]);
+      // Import par lien déjà téléchargé : seul le transcodage est à refaire
+      const telecharge = (await db.query('SELECT 1 FROM video_parties WHERE video_id = $1', [vid])).rowCount;
+      if (v.source === 'url' && !telecharge) await enfiler(db, ctx.clubId, 'import_url', { videoId: vid, url: v.source_url });
+      else await enfiler(db, ctx.clubId, 'transcodage', { videoId: vid });
+      return { ok: true };
+    });
+  });
+
   app.patch('/api/clubs/:clubId/videos/:vid', async (req) => {
     const ctx = await contexte(req, 'video.ecrire');
     const { vid } = valider(z.object({ vid: uuid }), req.params);
