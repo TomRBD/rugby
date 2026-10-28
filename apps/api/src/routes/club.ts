@@ -96,6 +96,15 @@ export default async function routesClub(app: FastifyInstance) {
     });
   });
 
+  app.post('/api/clubs/:clubId/reactivation', async (req) => {
+    const ctx = await contexte(req, 'club.gerer', null);
+    return avec(ctx, async (db) => {
+      await db.query('UPDATE clubs SET fin_abonnement = NULL, suppression_prevue = NULL WHERE id = $1', [ctx.clubId]);
+      await journaliser(db, ctx, 'reactivation', 'club', ctx.clubId);
+      return { ok: true };
+    });
+  });
+
   app.get('/api/clubs/:clubId/export-complet', async (req, reply) => {
     const ctx = await contexte(req, 'club.gerer', null);
     const data = await avec(ctx, async (db) => {
