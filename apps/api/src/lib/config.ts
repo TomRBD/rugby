@@ -3,7 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Fichier .env à la racine du dépôt (src/lib ou dist/lib -> ../../../../.env), sans écraser l'environnement existant
-const fichierEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../.env');
+const racine = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+const fichierEnv = path.join(racine, '.env');
 if (fs.existsSync(fichierEnv)) {
   for (const ligne of fs.readFileSync(fichierEnv, 'utf8').split(/\r?\n/)) {
     const m = ligne.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
@@ -27,7 +28,13 @@ export const config = {
   publicWebUrl: env('PUBLIC_WEB_URL', 'http://localhost:5173'),
   storage: {
     driver: env('STORAGE_DRIVER', 'local') as 'local' | 's3',
-    dir: path.resolve(env('STORAGE_DIR', './.data/storage')),
+    // Chemin relatif = relatif à la racine du dépôt : API et worker partagent le même dossier, hors des sources surveillées
+    dir: process.env.STORAGE_DIR
+      ? path.resolve(racine, process.env.STORAGE_DIR)
+      // Ancien emplacement par défaut (apps/api/.data) conservé s'il contient déjà des vidéos
+      : fs.existsSync(path.join(racine, 'apps/api/.data/storage')) && !fs.existsSync(path.join(racine, '.data/storage'))
+        ? path.join(racine, 'apps/api/.data/storage')
+        : path.join(racine, '.data/storage'),
     s3: {
       endpoint: process.env.S3_ENDPOINT,
       region: process.env.S3_REGION ?? 'fr-par',

@@ -11,6 +11,12 @@ export const poolAdmin = new pg.Pool({ connectionString: config.databaseUrl, max
 /** Connexion applicative : rôle sans privilège, soumis aux politiques RLS par club. */
 export const poolApp = new pg.Pool({ connectionString: config.appDatabaseUrl, max: 30 });
 
+// Une connexion inactive coupée par le réseau (Docker Desktop, pare-feu, redémarrage de PostgreSQL) ne doit pas
+// arrêter le processus : le pool la retire et en ouvre une nouvelle à la prochaine requête.
+for (const [nom, pool] of [['admin', poolAdmin], ['app', poolApp]] as const) {
+  pool.on('error', (e) => console.error(`[db] connexion ${nom} perdue, elle sera rouverte : ${e.message}`));
+}
+
 export type Db = pg.PoolClient;
 
 /** Exécute fn dans une transaction où seules les lignes du club sont visibles. */

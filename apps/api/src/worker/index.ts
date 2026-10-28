@@ -52,10 +52,20 @@ export async function demarrerWorker() {
   await migrer();
   // Jobs restés « en cours » après un arrêt brutal : remis en file
   await poolAdmin.query("UPDATE jobs SET statut = 'en_attente' WHERE statut = 'en_cours' AND verrouille_le < now() - interval '3 hours'");
-  const ecoute = new pg.Client({ connectionString: config.databaseUrl });
-  await ecoute.connect();
-  await ecoute.query('LISTEN jobs');
-  ecoute.on('notification', () => void remplir());
+  // Écoute des nouveaux jobs ; en cas de coupure on se reconnecte (l'interrogation toutes les 5 s prend le relais)
+  const ecouter = async () => {
+    const ecoute = new pg.Client({ connectionString: config.databaseUrl });
+    ecoute.on('error', (e) => {
+      console.error(`[worker] écoute PostgreSQL perdue : ${e.message}`);
+      void ecoute.end().catch(() => undefined);
+      setTimeout(() => void ecouter().catch(() => undefined), 5000);
+    });
+    await ecoute.connect();
+    await ecoute.query('LISTEN jobs');
+    ecoute.on('notification', () => void remplir());
+  };
+  await ecouter();
+  process.on('unhandledRejection', (e) => console.error('[worker] promesse rejetée non gérée :', e));
   setInterval(() => void remplir(), 5000);
   console.log(`[worker] démarré, ${CONCURRENCE} traitement(s) en parallèle`);
   await remplir();

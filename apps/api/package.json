@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch --clear-screen=false --ignore \"**/.data/**\" src/server.ts",
     "start": "node dist/server.js",
     "migrate": "tsx src/migrate.ts",
     "seed:demo": "tsx src/seedDemo.ts",

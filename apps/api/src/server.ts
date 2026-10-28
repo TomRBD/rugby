@@ -1,3 +1,6 @@
+// Erreurs asynchrones non rattrapées : journalisées au lieu d'arrêter l'API
+process.on('unhandledRejection', (e) => console.error('[api] promesse rejetée non gérée :', e));
+
 import { construireApp } from './app.js';
 import { config } from './lib/config.js';
 import { migrer } from './migrate.js';
