@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { useClubApi, useSession } from '../../lib/session';
 import { useDonnees } from '../../lib/hooks';
-import { televerser, televersementsInterrompus } from '../../lib/televersement';
+import { etatTeleversements, televerser, televersementsInterrompus, type EtatTeleversement } from '../../lib/televersement';
 import { Champ, useAction } from '../../composants/ui';
 
 const STATUTS: Record<string, string> = {
@@ -41,6 +41,9 @@ export function VideosMatch({ donnees, onMaj }: { donnees: any; onMaj: () => voi
   const [lien, setLien] = useState('');
   const [horsLigne, setHorsLigne] = useState<Record<string, number>>({});
   const jobs = useDonnees<any[]>(url(`/matchs/${match.id}/jobs`));
+  const [envois, setEnvois] = useState<EtatTeleversement[]>([]);
+  useEffect(() => etatTeleversements(setEnvois), []);
+  const enCours = envois.filter((u) => u.matchId === match.id && u.statut !== 'termine');
   const interrompus = Object.values(televersementsInterrompus()).filter((u) => u.matchId === match.id);
 
   // Suivi du traitement serveur
@@ -71,6 +74,15 @@ export function VideosMatch({ donnees, onMaj }: { donnees: any; onMaj: () => voi
               <input type="file" accept="video/*,.mkv,.mts" multiple onChange={(e) => choisir(e.target.files)} />
             </Champ>
           </div>
+          {enCours.map((u) => (
+            <div key={u.videoId} className={`alerte ${u.statut === 'erreur' ? 'erreur' : ''}`}>
+              <div className="ligne entre">
+                <span>{u.statut === 'pause' ? 'Envoi en pause (réseau ou serveur indisponible), reprise automatique' : u.statut === 'erreur' ? `Envoi arrêté : ${u.erreur}` : 'Envoi en cours, vous pouvez continuer à naviguer'} : {u.nom}</span>
+                <strong>{Math.round(u.progression * 100)} %</strong>
+              </div>
+              <div className="barre-progression"><div style={{ width: `${u.progression * 100}%` }} /></div>
+            </div>
+          ))}
           {interrompus.map((u) => (
             <div key={u.videoId} className="alerte">
               Envoi interrompu ({u.parties.map((p) => p.nom).join(', ')}). Resélectionnez le ou les mêmes fichiers pour reprendre là où il s'était arrêté :

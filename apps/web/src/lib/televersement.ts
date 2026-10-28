@@ -1,6 +1,6 @@
 // Téléversement reprenable en tâche de fond : morceaux de 8 Mo, reprise à l'offset serveur,
 // continue pendant la navigation dans l'application, reprend après une coupure réseau.
-import { api } from './api';
+import { api, ErreurApi } from './api';
 
 export interface EtatTeleversement {
   videoId: string;
@@ -31,8 +31,13 @@ function memoriser(cle: string, valeur: unknown) {
     localStorage.setItem('rugby.uploads', JSON.stringify(l));
   } catch { /* ignoré */ }
 }
+/** Envois commencés puis interrompus (onglet fermé, page rechargée) ; ceux qui tournent encore dans cet onglet sont exclus. */
 export function televersementsInterrompus(): Record<string, { clubId: string; matchId: string; videoId: string; parties: { id: string; nom: string; taille: number }[] }> {
-  try { return JSON.parse(localStorage.getItem('rugby.uploads') ?? '{}'); } catch { return {}; }
+  try {
+    const tous = JSON.parse(localStorage.getItem('rugby.uploads') ?? '{}');
+    for (const id of Object.keys(tous)) if (['en_cours', 'pause'].includes(etats.get(id)?.statut ?? '')) delete tous[id];
+    return tous;
+  } catch { return {}; }
 }
 
 export async function televerser(clubId: string, matchId: string, fichiers: File[], angle = 'Principal', reprise?: { videoId: string; parties: { id: string; nom: string; taille: number }[] }) {
@@ -60,7 +65,16 @@ export async function televerser(clubId: string, matchId: string, fichiers: File
         const f = tries.find((x) => x.name === p.nom && x.size === p.taille);
         if (!f) throw new Error(`Fichier ${p.nom} manquant : resélectionnez-le`);
         const base = `/api/clubs/${clubId}/videos/${videoId}/parties/${p.id}`;
-        let offset = (await api(base)).recu as number;
+        let offset = -1;
+        while (offset < 0) {
+          offset = await api(base).then((r) => r.recu as number).catch(async (e) => {
+            if ((e as ErreurApi).statut >= 400 && (e as ErreurApi).statut < 500) throw e;
+            etat.statut = 'pause';
+            notifier();
+            await attendre(5000);
+            return -1;
+          });
+        }
         const MORCEAU = 8 * 1024 * 1024;
         let essais = 0;
         while (offset < p.taille) {
@@ -71,10 +85,14 @@ export async function televerser(clubId: string, matchId: string, fichiers: File
             offset = r.recu;
             essais = 0;
           } catch (e) {
-            // Reprise : on redemande l'offset réellement reçu par le serveur
-            if (++essais > 8) throw e;
-            await attendre(Math.min(30_000, 1000 * 2 ** essais));
-            offset = (await api(base)).recu;
+            // Erreur de la requête elle-même (4xx) : définitive. Serveur injoignable ou en erreur : pause puis reprise
+            // à l'offset réellement reçu, sans limite de tentatives (l'API peut redémarrer pendant un long envoi).
+            const statut = (e as ErreurApi).statut;
+            if (statut && statut >= 400 && statut < 500) throw e;
+            etat.statut = 'pause';
+            notifier();
+            await attendre(Math.min(30_000, 1000 * 2 ** Math.min(++essais, 5)));
+            offset = await api(base).then((r) => r.recu as number).catch(() => offset);
           }
           etat.progression = (envoyeAvant + offset) / total;
           notifier();
