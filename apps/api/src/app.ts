@@ -20,7 +20,7 @@ import routesRapports from './routes/rapports.js';
 import { poolApp } from './lib/db.js';
 
 export async function construireApp(options: { logger?: boolean } = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: options.logger ?? false, bodyLimit: 25 * 1024 * 1024, trustProxy: true, maxParamLength: 2000 });
+  const app = Fastify({ logger: options.logger ?? false, bodyLimit: 25 * 1024 * 1024, trustProxy: true, routerOptions: { maxParamLength: 2000 } });
   await app.register(cors, { origin: [config.publicWebUrl, /^http:\/\/localhost(:\d+)?$/], credentials: true });
   await app.register(websocket);
 

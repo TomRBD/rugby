@@ -1,0 +1,27 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ["5433:5432"]
+        options: --health-cmd pg_isready --health-interval 5s
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Rôles et base de test
+        env: { PGPASSWORD: postgres }
+        run: |
+          psql -h localhost -p 5433 -U postgres -c "CREATE ROLE rugby_admin LOGIN PASSWORD 'rugby_admin' CREATEDB"
+          psql -h localhost -p 5433 -U postgres -c "CREATE ROLE rugby_app LOGIN PASSWORD 'rugby_app'"
+          psql -h localhost -p 5433 -U postgres -c "CREATE DATABASE rugby_test OWNER rugby_admin"
+      - run: npm ci
+      - run: npm run build -w @rugby/shared
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build -w @rugby/web

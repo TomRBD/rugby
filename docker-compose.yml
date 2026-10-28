@@ -1,0 +1,93 @@
+# Déploiement complet sur un serveur (OVHcloud, Scaleway) : docker compose up -d
+# Changez les mots de passe et secrets dans .env avant toute mise en production.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - pg:/var/lib/postgresql/data
+      - ./deploy/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+
+  minio:
+    # Stockage objet S3 compatible en auto-hébergement (remplaçable par Scaleway / OVHcloud Object Storage)
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-rugby}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-rugby-secret-a-changer}
+    volumes: [minio:/data]
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-11-17T19-35-25Z
+    depends_on: [minio]
+    entrypoint: >
+      sh -c "sleep 3 && mc alias set s3 http://minio:9000 $${MINIO_ROOT_USER:-rugby} $${MINIO_ROOT_PASSWORD:-rugby-secret-a-changer} && mc mb -p s3/rugby-videos"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-rugby}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-rugby-secret-a-changer}
+
+  api:
+    build: { context: ., target: serveur }
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    env_file: .env
+    environment: &env
+      DATABASE_URL: postgres://rugby_admin:rugby_admin@postgres:5432/rugby
+      APP_DATABASE_URL: postgres://rugby_app:rugby_app@postgres:5432/rugby
+      STORAGE_DRIVER: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: rugby-videos
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-rugby}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-rugby-secret-a-changer}
+      NODE_ENV: production
+
+  worker:
+    build: { context: ., target: serveur }
+    restart: unless-stopped
+    command: ["node", "dist/worker/index.js"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    env_file: .env
+    environment:
+      <<: *env
+      WORKER_TMP: /tmp/rugby
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    tmpfs: [/tmp/rugby:size=60g]
+
+  web:
+    build: { context: ., target: web }
+    restart: unless-stopped
+    depends_on: [api]
+    ports: ["${PORT_WEB:-8080}:80"]
+
+  sauvegarde:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on: [postgres]
+    environment:
+      PGPASSWORD: rugby_admin
+    volumes: [./deploy/sauvegarde.sh:/sauvegarde.sh:ro, sauvegardes:/sauvegardes]
+    entrypoint: ["sh", "-c", "while true; do sh /sauvegarde.sh; sleep 86400; done"]
+
+  # Service IA : à lancer sur une machine GPU à la demande (profil séparé)
+  ia:
+    profiles: [gpu]
+    build: apps/ia
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    ports: ["8000:8000"]
+
+volumes:
+  pg:
+  minio:
+  sauvegardes:

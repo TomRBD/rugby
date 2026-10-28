@@ -7,6 +7,13 @@ import { stockage } from '../lib/stockage.js';
 import { prefixeVideo } from '../routes/videos.js';
 import { FFMPEG, decoderAudio, executer, ffmpegAvecProgression, sonder, type Sonde } from './ffmpeg.js';
 import { decalageParSifflets, detecterSifflets } from './audio.js';
+import { signerMedia } from '../lib/securite.js';
+
+/** Vidéo transmise au service IA : URL HLS signée si l'API est joignable (GPU distant), sinon chemin local partagé. */
+function videoPourIa(clubId: string, videoId: string, source: string) {
+  const base = process.env.PUBLIC_API_URL;
+  return base ? `${base}/media/${signerMedia(`${prefixeVideo(clubId, videoId)}/hls/`, 12 * 3600)}/master.m3u8` : source;
+}
 
 export interface Job {
   id: string;
@@ -226,7 +233,7 @@ export async function analyseIa(job: Job) {
         // Service GPU : détection mêlée / touche / coup d'envoi par modèle de vision
         const r = await fetch(`${process.env.IA_SERVICE_URL}/phases`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ video: source.startsWith('/') ? source : undefined, duree: v.duree }),
+          body: JSON.stringify({ video: videoPourIa(job.club_id!, videoId, source), duree: v.duree }),
         });
         if (!r.ok) throw new Error(`Service IA : ${r.status}`);
         for (const p of (await r.json()) as any[]) propositions.push({ type: p.type, debut: p.debut, fin: p.fin, confiance: p.confiance, details: { methode: 'vision' } });
@@ -239,7 +246,7 @@ export async function analyseIa(job: Job) {
     }
     if (analyses.includes('tracking') && process.env.IA_SERVICE_URL) {
       const r = await fetch(`${process.env.IA_SERVICE_URL}/tracking`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ video: source }),
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ video: videoPourIa(job.club_id!, videoId, source) }),
       });
       if (!r.ok) throw new Error(`Service IA : ${r.status}`);
       const pistes = (await r.json()) as { piste: number; camp?: string; numero?: number; confiance_numero?: number; positions: number[][] }[];
