@@ -5,11 +5,12 @@ Cahier des charges : [CLAUDE.md](CLAUDE.md).
 
 ## Démarrage rapide (développement)
 
-Prérequis : Node 20+, PostgreSQL 16 (binaires locaux), FFmpeg.
+Prérequis : Node 20+, FFmpeg dans le PATH (pour le worker vidéo), et pour la base soit Docker Desktop
+(Windows, macOS, Linux), soit les binaires PostgreSQL 16 sous Linux.
 
 ```bash
 npm install
-npm run db:start                     # PostgreSQL local sur le port 5433 (rôles rugby_admin / rugby_app)
+npm run db:start                     # PostgreSQL sur le port 5433 (Docker, ou binaires locaux sous Linux)
 npm run build -w @rugby/shared
 npm run migrate
 npm run seed:demo                    # club de démo : 4 matchs codés dont 1 avec vidéo, playlists, compte joueur

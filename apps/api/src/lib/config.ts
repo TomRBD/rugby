@@ -1,4 +1,15 @@
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Fichier .env à la racine du dépôt (src/lib ou dist/lib -> ../../../../.env), sans écraser l'environnement existant
+const fichierEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../.env');
+if (fs.existsSync(fichierEnv)) {
+  for (const ligne of fs.readFileSync(fichierEnv, 'utf8').split(/\r?\n/)) {
+    const m = ligne.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+  }
+}
 
 const env = (k: string, d?: string) => {
   const v = process.env[k] ?? d;
